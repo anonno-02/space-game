@@ -226,8 +226,8 @@ function update() {
     }
 
     if (joyActive) {
-        velocityX += joyDX * acceleration;
-        velocityY += joyDY * acceleration;
+        velocityX += joyDX * acceleration * 1.5;
+        velocityY += joyDY * acceleration * 1.5;
     }
 
     // LIMIT SPEED
