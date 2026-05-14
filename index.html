@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Space Game</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
+
+    <style>
+    body {
+        margin: 0;
+        overflow: hidden;
+        background: black;
+    }
+
+    canvas {
+        display: block;
+    }
+
+    #coords {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+
+    color: white;
+    font-family: Arial;
+    font-size: 20px;
+
+    z-index: 999;
+
+    pointer-events: none;
+}
+    </style>
+</head>
+<body>
+
+<div id="coords">
+X: 0<br>
+Y: 0<br>
+SunX: 0<br>
+SunY: 0
+</div>
+
+<script>
+
+let ship;
+let stars;
+let sun;
+
+let sunWorldX = Phaser.Math.Between(-5000,5000);
+let sunWorldY = Phaser.Math.Between(-5000,5000);
+let gravityG = 30000;        // tweak this for sun gravitation insanity level
+let gravityRadius = 1500;   // visual field radius
+let gravityCircle;
+
+let shipColor = 0xff0000;
+
+let velocityX = 0;
+let velocityY = 0;
+
+let worldX = 0;
+let worldY = 0;
+
+const acceleration = 0.15;
+const friction = 0.99;
+const maxSpeed = 20;
+
+let baseZoom = 1;
+let shipAngle = 4.71239;
+
+let trailDots = [];
+let trailTimer = 0;
+
+let touchActive = false;
+let touchX = 0;
+let touchY = 0;
+let joyActive = false;
+let joyCenterX = 0;
+let joyCenterY = 0;
+let joyDX = 0;
+let joyDY = 0;
+
+const config = {
+
+    type: Phaser.AUTO,
+
+    width: window.innerWidth,
+    height: window.innerHeight,
+
+    backgroundColor: '#000000',
+
+    scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH
+    },
+
+    scene: {
+        create: create,
+        update: update
+    }
+};
+
+const game = new Phaser.Game(config);
+
+window.addEventListener('resize', () => {
+
+    game.scale.resize(
+        window.innerWidth,
+        window.innerHeight
+    );
+
+});
+
+function create() {
+
+    // STAR BACKGROUND
+    stars = this.add.tileSprite(
+        0-window.innerWidth/0.835,
+        0-window.innerHeight/0.835,
+        window.innerWidth*3.33,
+        window.innerHeight*3.33,
+        createStarTexture(this)
+    );
+
+    stars.setOrigin(0, 0);
+
+    // SHIP IN CENTER
+    ship = this.add.triangle(
+        window.innerWidth / 2,
+        window.innerHeight / 2,
+        -10, 40,
+        -10, 0,
+        15, 20,
+        shipColor
+    );
+
+    this.cameras.main.setZoom(baseZoom);
+
+    sun = this.add.circle(
+        0,
+        0,
+        400,
+        0xffcc33,
+        1
+    );
+
+    // GRAVITY FIELD VISUAL (faded red circle)
+    gravityCircle = this.add.circle(
+        0,
+        0,
+        gravityRadius,
+        0xff0000,
+        0.08
+    );
+
+    gravityCircle.setStrokeStyle(2, 0xff0000, 0.3);
+
+    ship.setDepth(10);
+    sun.setDepth(1);
+    gravityCircle.setDepth(0);
+    stars.setDepth(-1);
+
+    //----mobile touch part----
+    this.input.on('pointerdown', (pointer) => {
+        joyActive = true;
+
+        // set joystick center ON TOUCH START
+        joyCenterX = pointer.x;
+        joyCenterY = pointer.y;
+    });
+
+    this.input.on('pointerup', () => {
+        joyActive = false;
+
+        // reset movement
+        joyDX = 0;
+        joyDY = 0;
+    });
+
+    this.input.on('pointermove', (pointer) => {
+        if (!joyActive) return;
+
+        let dx = pointer.x - joyCenterX;
+        let dy = pointer.y - joyCenterY;
+
+        let len = Math.sqrt(dx * dx + dy * dy);
+
+        // normalize + clamp
+        if (len > 0) {
+            joyDX = dx / len;
+            joyDY = dy / len;
+        } else {
+            joyDX = 0;
+            joyDY = 0;
+        }
+
+        // optional: magnitude (how far finger is dragged)
+        let maxRadius = 120;
+
+        let strength = Math.min(len / maxRadius, 1);
+
+        joyDX *= strength;
+        joyDY *= strength;
+    });
+    
+}
+
+function update() {
+
+    trailTimer++;
+
+    // INPUT
+    if (this.input.keyboard.addKey('LEFT').isDown) {
+        velocityX -= acceleration;
+    }
+
+    if (this.input.keyboard.addKey('RIGHT').isDown) {
+        velocityX += acceleration;
+    }
+
+    if (this.input.keyboard.addKey('UP').isDown) {
+        velocityY -= acceleration;
+    }
+
+    if (this.input.keyboard.addKey('DOWN').isDown) {
+        velocityY += acceleration;
+    }
+
+    if (joyActive) {
+        velocityX += joyDX * acceleration * 2;
+        velocityY += joyDY * acceleration * 2;
+    }
+
+    // LIMIT SPEED
+    velocityX = Phaser.Math.Clamp(
+        velocityX,
+        -maxSpeed,
+        maxSpeed
+    );
+
+    velocityY = Phaser.Math.Clamp(
+        velocityY,
+        -maxSpeed,
+        maxSpeed
+    );
+
+    // ONLY rotate if moving
+    if (velocityX !== 0 || velocityY !== 0) {
+        shipAngle = Math.atan2(velocityY, velocityX);
+    }
+
+    // MOVE WORLD
+    worldX += velocityX;
+    worldY += velocityY;
+
+    // ----------------------
+    // GRAVITY FROM SUN
+    // ----------------------
+
+    let dx = sunWorldX - worldX;
+    let dy = sunWorldY - worldY;
+
+    let distSq = dx * dx + dy * dy;
+    let dist = Math.sqrt(distSq);
+
+    // avoid division chaos near center
+    let safeDistSq = Math.max(distSq, 2500);
+
+    // inverse-square-ish gravity
+    let force = gravityG / safeDistSq;
+
+    // direction normalized
+    let nx = dx / dist;
+    let ny = dy / dist;
+
+    // apply gravity to velocity
+    velocityX += nx * force;
+    velocityY += ny * force;
+
+    // Part where safely landed on sun
+    let dxS = sunWorldX - worldX;
+    let dyS = sunWorldY - worldY;
+
+    let distS = Math.sqrt(dxS * dxS + dyS * dyS);
+
+    // effective collision radius (sun radius)
+    let sunRadius = 400;
+
+    // check collision
+    if (distS < sunRadius) {
+
+        // normalize direction from sun → ship
+        let nx = (worldX - sunWorldX) / distS;
+        let ny = (worldY - sunWorldY) / distS;
+
+        // snap ship to surface
+        worldX = sunWorldX + nx * sunRadius;
+        worldY = sunWorldY + ny * sunRadius;
+
+        // kill velocity (no cheating orbit physics)
+        velocityX = 0;
+        velocityY = 0;
+
+        // face away from sun
+        shipAngle = Math.atan2(ny, nx);
+    }
+
+    // CREATE TRAIL DOT
+    if (trailTimer > 5) {
+
+        trailTimer = 0;
+
+        let dot = this.add.circle(
+            window.innerWidth/2,
+            window.innerHeight/2,
+            2,
+            shipColor,
+            1
+        );
+
+        dot.worldX = worldX;
+        dot.worldY = worldY;
+
+        dot.birthTime = this.time.now;
+
+        trailDots.push(dot);
+    }
+
+    // MOVE STAR BACKGROUND
+    stars.tilePositionX = worldX;
+    stars.tilePositionY = worldY;
+
+    // OPTIONAL FRICTION
+    velocityX *= friction;
+    velocityY *= friction;
+    
+    //RESET SHIP
+    ship.x = window.innerWidth / 2;
+    ship.y = window.innerHeight / 2;
+    ship.rotation = shipAngle;
+
+    // CALCULATE SPEED
+    let speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
+
+    // MAP SPEED → ZOOM
+    let zoom = Phaser.Math.Clamp(
+        1 - (speed * 0.03),
+        0.3,
+        1
+    );
+
+    // APPLY ZOOM
+    this.cameras.main.setZoom(zoom);
+
+    // UPDATE TRAIL DOTS
+    for (let i = trailDots.length - 1; i >= 0; i--) {
+
+        let dot = trailDots[i];
+
+        // POSITION RELATIVE TO CAMERA
+        dot.x = (
+            window.innerWidth / 2
+            + (dot.worldX - worldX)
+        );
+
+        dot.y = (
+            window.innerHeight / 2
+            + (dot.worldY - worldY)
+        );
+
+        // FADE OUT OVER TIME
+        let age = this.time.now - dot.birthTime;
+
+        dot.alpha = 1 - (age / 20000);
+
+        // DELETE AFTER 20s
+        if (age > 20000) {
+            dot.destroy();
+            trailDots.splice(i, 1);
+        }
+    }
+
+    sun.x = (
+        window.innerWidth / 2
+        + (sunWorldX - worldX)
+    );
+
+    sun.y = (
+        window.innerHeight / 2
+        + (sunWorldY - worldY)
+    );
+
+    gravityCircle.x = sun.x;
+    gravityCircle.y = sun.y;    
+
+    document.getElementById('coords').innerHTML =
+        'X: ' + Math.round(worldX) +
+        '<br>Y: ' + Math.round(worldY) +
+        '<br>SunX: ' + Math.round(sunWorldX) +
+        '<br>SunY: ' + Math.round(sunWorldY);
+
+}
+
+// CREATE STAR TEXTURE
+
+function createStarTexture(scene) {
+
+    const graphics = scene.make.graphics({ x: 0, y: 0, add: false });
+
+    graphics.fillStyle(0x000000, 1);
+    graphics.fillRect(0, 0, 512, 512);
+
+    for (let i = 0; i < 200; i++) {
+
+        const x = Phaser.Math.Between(0, 512);
+        const y = Phaser.Math.Between(0, 512);
+
+        const size = Phaser.Math.Between(1, 2);
+
+        graphics.fillStyle(0xffffff, Math.random());
+
+        graphics.fillCircle(x, y, size);
+
+    }
+
+    graphics.generateTexture('starsTexture', 512, 512);
+
+    return 'starsTexture';
+
+}
+
+</script>
+
+</body>
+</html>
